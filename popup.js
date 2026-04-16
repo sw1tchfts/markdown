@@ -2,6 +2,7 @@ const saveBtn = document.getElementById("save");
 const statusEl = document.getElementById("status");
 const readableEl = document.getElementById("readable");
 const frontmatterEl = document.getElementById("frontmatter");
+const imageModeEl = document.getElementById("imageMode");
 
 function setStatus(msg, kind) {
   statusEl.textContent = msg || "";
@@ -35,9 +36,40 @@ async function getActiveTab() {
   return tab;
 }
 
+function downloadOnce(options) {
+  return new Promise((resolve, reject) => {
+    chrome.downloads.download(options, (id) => {
+      const err = chrome.runtime.lastError;
+      if (err) reject(new Error(err.message));
+      else resolve(id);
+    });
+  });
+}
+
+async function downloadImages(images, folderName) {
+  let ok = 0;
+  let failed = 0;
+  for (const img of images) {
+    try {
+      await downloadOnce({
+        url: img.url,
+        filename: `${folderName}/${img.localName}`,
+        conflictAction: "overwrite",
+        saveAs: false,
+      });
+      ok += 1;
+    } catch (e) {
+      console.warn("Image failed:", img.url, e);
+      failed += 1;
+    }
+  }
+  return { ok, failed };
+}
+
 async function run() {
   saveBtn.disabled = true;
   setStatus("Extracting page…");
+  let blobUrl;
   try {
     const tab = await getActiveTab();
     if (!tab || !tab.id) throw new Error("No active tab.");
@@ -45,16 +77,25 @@ async function run() {
       throw new Error("This page can't be converted (only http/https).");
     }
 
-    const [injection] = await chrome.scripting.executeScript({
+    await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       files: ["converter.js"],
     });
-    if (!injection) throw new Error("Failed to inject converter.");
+
+    const imageMode = imageModeEl.value === "sidecar" ? "sidecar" : "link";
+
+    const titleProbe = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => (document.title || "Untitled").trim(),
+    });
+    const pageTitle = (titleProbe[0] && titleProbe[0].result) || "Untitled";
+    const baseName = sanitizeFilename(pageTitle);
+    const assetsFolder = imageMode === "sidecar" ? `${baseName}.assets` : "assets";
 
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: (opts) => extractPageAsMarkdown(opts),
-      args: [{ readable: readableEl.checked }],
+      args: [{ readable: readableEl.checked, imageMode, assetsFolder }],
     });
     if (!result || !result.markdown) throw new Error("No content extracted.");
 
@@ -63,17 +104,23 @@ async function run() {
     const body = result.markdown.startsWith("# ") ? result.markdown : heading + result.markdown;
     const md = header + body;
 
-    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const filename = sanitizeFilename(result.title) + ".md";
+    if (imageMode === "sidecar" && result.images.length) {
+      setStatus(`Saving ${result.images.length} image(s)…`);
+      const { ok, failed } = await downloadImages(result.images, assetsFolder);
+      if (failed && !ok) throw new Error("All image downloads failed.");
+      if (failed) setStatus(`${ok} saved, ${failed} failed. Saving markdown…`);
+    }
 
-    await chrome.downloads.download({ url, filename, saveAs: true });
+    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+    blobUrl = URL.createObjectURL(blob);
+    const filename = `${baseName}.md`;
+    await downloadOnce({ url: blobUrl, filename, saveAs: true });
     setStatus("Saved.", "ok");
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   } catch (err) {
     console.error(err);
     setStatus(err.message || String(err), "error");
   } finally {
+    if (blobUrl) setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
     saveBtn.disabled = false;
   }
 }

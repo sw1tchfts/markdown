@@ -1,7 +1,14 @@
 // Runs in the context of the inspected page via chrome.scripting.executeScript.
-// Returns { title, url, markdown } for the current document.
+// Returns { title, url, markdown, images } for the current document.
+// opts.imageMode: "link" (default) | "sidecar"
+// opts.assetsFolder: folder name used to build relative paths when imageMode==="sidecar"
 function extractPageAsMarkdown(options) {
-  const opts = Object.assign({ readable: true }, options || {});
+  const opts = Object.assign(
+    { readable: true, imageMode: "link", assetsFolder: "assets" },
+    options || {}
+  );
+  const images = [];
+  const urlToLocal = new Map();
 
   const BLOCK_SKIP = new Set([
     "SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "IFRAME",
@@ -37,6 +44,56 @@ function extractPageAsMarkdown(options) {
 
   function collapseWs(text) {
     return text.replace(/[\t\n\r ]+/g, " ");
+  }
+
+  function bestImageUrl(img) {
+    if (img.currentSrc) return img.currentSrc;
+    const srcset = img.getAttribute("srcset");
+    if (srcset) {
+      const candidates = srcset
+        .split(",")
+        .map((s) => {
+          const parts = s.trim().split(/\s+/);
+          const u = parts[0];
+          const desc = parts[1] || "";
+          const w = parseInt(desc, 10) || (desc.endsWith("x") ? parseFloat(desc) * 1000 : 0);
+          return { u, w };
+        })
+        .filter((c) => c.u);
+      if (candidates.length) {
+        candidates.sort((a, b) => b.w - a.w);
+        return candidates[0].u;
+      }
+    }
+    return (
+      img.getAttribute("src") ||
+      img.dataset.src ||
+      img.dataset.original ||
+      img.dataset.lazySrc ||
+      img.dataset.srcLazy ||
+      ""
+    );
+  }
+
+  function extFromUrl(url) {
+    try {
+      const u = new URL(url);
+      const m = u.pathname.match(/\.([a-zA-Z0-9]{2,5})$/);
+      if (m) {
+        const e = m[1].toLowerCase();
+        if (/^(png|jpg|jpeg|gif|webp|avif|svg|bmp|ico|tif|tiff)$/.test(e)) return e;
+      }
+    } catch {}
+    return "png";
+  }
+
+  function registerImage(absUrl) {
+    if (urlToLocal.has(absUrl)) return urlToLocal.get(absUrl);
+    const index = images.length + 1;
+    const localName = `img-${String(index).padStart(3, "0")}.${extFromUrl(absUrl)}`;
+    images.push({ url: absUrl, localName });
+    urlToLocal.set(absUrl, localName);
+    return localName;
   }
 
   function isBlock(node) {
@@ -139,8 +196,19 @@ function extractPageAsMarkdown(options) {
       }
       case "IMG": {
         const alt = (node.getAttribute("alt") || "").replace(/\]/g, "\\]");
-        const src = resolveUrl(node.getAttribute("src"));
-        return src ? `![${alt}](${src})` : "";
+        const raw = bestImageUrl(node);
+        if (!raw) return "";
+        if (raw.startsWith("data:") || raw.startsWith("blob:")) {
+          return `![${alt}](${raw})`;
+        }
+        const abs = resolveUrl(raw);
+        if (!abs) return "";
+        if (opts.imageMode === "sidecar") {
+          const local = registerImage(abs);
+          const folder = encodeURI(opts.assetsFolder);
+          return `![${alt}](./${folder}/${local})`;
+        }
+        return `![${alt}](${abs})`;
       }
       case "UL": return renderList(node, false, ctx);
       case "OL": return renderList(node, true, ctx);
@@ -170,5 +238,5 @@ function extractPageAsMarkdown(options) {
   const root = pickRoot();
   const body = clean(processNode(root, { pre: false, inList: false }));
   const title = (document.title || "Untitled").trim();
-  return { title, url: location.href, markdown: body };
+  return { title, url: location.href, markdown: body, images };
 }

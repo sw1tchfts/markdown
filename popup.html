@@ -18,6 +18,13 @@
         <input type="checkbox" id="frontmatter" checked />
         Include YAML front matter
       </label>
+      <label class="row stacked">
+        <span>Images</span>
+        <select id="imageMode">
+          <option value="sidecar">Save alongside (folder)</option>
+          <option value="link">Link to original</option>
+        </select>
+      </label>
       <button id="save" type="button">Save as .md</button>
       <p id="status" role="status"></p>
     </main>
