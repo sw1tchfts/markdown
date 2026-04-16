@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Page to Markdown</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Page to Markdown</h1>
+    </header>
+    <main>
+      <label class="row">
+        <input type="checkbox" id="readable" checked />
+        Extract main content only
+      </label>
+      <label class="row">
+        <input type="checkbox" id="frontmatter" checked />
+        Include YAML front matter
+      </label>
+      <button id="save" type="button">Save as .md</button>
+      <p id="status" role="status"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
